@@ -199,14 +199,20 @@ let baseAlive = true;
 
 // Input
 const keys = {};
+const GAME_KEYS = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyA','KeyS','KeyD','Space','KeyJ','KeyF'];
 window.addEventListener('keydown', e => {
   keys[e.key] = true;
   keys[e.code] = true;
-  e.preventDefault();
+  if (GAME_KEYS.includes(e.code)) {
+    e.preventDefault();
+  }
 });
 window.addEventListener('keyup', e => {
   keys[e.key] = false;
   keys[e.code] = false;
+  if (GAME_KEYS.includes(e.code)) {
+    e.preventDefault();
+  }
 });
 
 // Canvas click for restart
@@ -274,25 +280,28 @@ const LEVELS = [
 // ==================== Tank Class ====================
 class Tank {
   constructor(x, y, dir, color, colorD, isPlayer = false) {
-    this.x = x;
-    this.y = y;
+    // Snap initial position to half-cell grid
+    this.x = Math.round(x / (CELL / 2)) * (CELL / 2);
+    this.y = Math.round(y / (CELL / 2)) * (CELL / 2);
     this.dir = dir;
-    this.speed = isPlayer ? 2.5 : 1.5;
-    this.size = CELL * 0.85;
+    this.speed = isPlayer ? 2.0 : 1.2;
+    this.size = CELL - 6;  // 34px — leaves 3px gap on each side in a 40px cell
     this.half = this.size / 2;
     this.color = color;
     this.colorD = colorD;
     this.isPlayer = isPlayer;
     this.shootCooldown = 0;
-    this.shootDelay = isPlayer ? 15 : 60;
+    this.shootDelay = isPlayer ? 15 : 70;
     this.alive = true;
     this.hp = isPlayer ? 1 : 1;
     this.flashTimer = 0;
     this.spawnTimer = 30; // invincibility during spawn
     this.moveTimer = 0;
-    this.moveDirChange = 60 + Math.random() * 60;
+    this.moveDirChange = 50 + Math.floor(Math.random() * 60);
     this.stuck = false;
     this.stuckTimer = 0;
+    // Smooth movement: track which axis we're sliding on
+    this.slidingAxis = null; // 'x' | 'y' | null
   }
 
   getBoundingBox() {
@@ -316,6 +325,10 @@ class Tank {
 
   collidesWithWalls(walls) {
     const box = this.getBoundingBox();
+    // Check bounds
+    if (box.x < 0 || box.x + box.w > W || box.y < 0 || box.y + box.h > H) {
+      return true;
+    }
     for (const w of walls) {
       if (
         box.x < w.x + w.w &&
@@ -326,60 +339,139 @@ class Tank {
         return true;
       }
     }
-    // Check bounds
-    if (box.x < 0 || box.x + box.w > W || box.y < 0 || box.y + box.h > H) {
-      return true;
-    }
     return false;
   }
 
   collidesWithTank(other) {
-    if (other === this || !other.alive) return false;
+    if (other === this || !other || !other.alive) return false;
     const a = this.getBoundingBox();
     const b = other.getBoundingBox();
-    // Add small padding
-    const pad = 2;
     return (
-      a.x - pad < b.x + b.w + pad &&
-      a.x + a.w + pad > b.x - pad &&
-      a.y - pad < b.y + b.h + pad &&
-      a.y + a.h + pad > b.y - pad
+      a.x < b.x + b.w &&
+      a.x + a.w > b.x &&
+      a.y < b.y + b.h &&
+      a.y + a.h > b.y
     );
   }
 
-  move(dx, dy, walls, allTanks) {
+  /**
+   * Move the tank in the given direction. Uses grid snapping + wall sliding:
+   * - Before moving horizontally, snap Y to the nearest half-cell center
+   * - Before moving vertically, snap X to the nearest half-cell center
+   * - If blocked, try sliding along the wall by nudging the perpendicular axis
+   */
+  move(dir, walls, allTanks) {
     if (this.spawnTimer > 0) return;
     if (this.flashTimer > 0) return;
 
     const origX = this.x;
     const origY = this.y;
 
-    this.x += dx * this.speed;
-    if (this.collidesWithWalls(walls) || allTanks.some(t => this.collidesWithTank(t))) {
-      this.x = origX;
+    // === Grid snapping on the perpendicular axis ===
+    // This ensures tanks align with the 20px half-grid, letting them
+    // pass through 1-cell-wide corridors without getting stuck.
+    if (dir.x !== 0) {
+      // Moving horizontally — snap Y to nearest half-cell
+      this.y = Math.round(this.y / (CELL / 2)) * (CELL / 2);
+    } else if (dir.y !== 0) {
+      // Moving vertically — snap X to nearest half-cell
+      this.x = Math.round(this.x / (CELL / 2)) * (CELL / 2);
     }
 
-    this.y += dy * this.speed;
-    if (this.collidesWithWalls(walls) || allTanks.some(t => this.collidesWithTank(t))) {
-      this.y = origY;
-    }
+    // === Attempt primary move ===
+    this.x += dir.x * this.speed;
+    this.y += dir.y * this.speed;
 
-    // Check if stuck (didn't move)
-    if (Math.abs(this.x - origX) < 0.1 && Math.abs(this.y - origY) < 0.1) {
-      this.stuckTimer++;
-    } else {
+    const collidesWithEnv = this.collidesWithWalls(walls);
+    const collidesWithOther = allTanks.some(t => this.collidesWithTank(t));
+
+    if (!collidesWithEnv && !collidesWithOther) {
+      // Move succeeded — clear stuck timer
       this.stuckTimer = 0;
+      this.slidingAxis = null;
+      return;
     }
+
+    // === Wall sliding ===
+    // If moving horizontally but blocked, try nudging Y to slide along a wall
+    if (dir.x !== 0 && (collidesWithEnv || collidesWithOther)) {
+      const slideY = this.y;
+      const found = this._trySlideY(slideY, walls, allTanks);
+      if (found) {
+        this.stuckTimer = 0;
+        this.slidingAxis = 'y';
+        return;
+      }
+      this.y = slideY;
+    }
+
+    if (dir.y !== 0 && (collidesWithEnv || collidesWithOther)) {
+      const slideX = this.x;
+      const found = this._trySlideX(slideX, walls, allTanks);
+      if (found) {
+        this.stuckTimer = 0;
+        this.slidingAxis = 'x';
+        return;
+      }
+      this.x = slideX;
+    }
+
+    // === Couldn't move at all — revert ===
+    this.x = origX;
+    this.y = origY;
+
+    // Also re-snap in case of revert
+    if (dir.x !== 0) {
+      this.y = Math.round(this.y / (CELL / 2)) * (CELL / 2);
+    } else if (dir.y !== 0) {
+      this.x = Math.round(this.x / (CELL / 2)) * (CELL / 2);
+    }
+
+    this.stuckTimer++;
+    this.slidingAxis = null;
+  }
+
+  /** Try nudging Y position to slide past an obstacle while moving horizontally */
+  _trySlideY(origY, walls, allTanks) {
+    // Try offsets in both directions, small to large
+    const offsets = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6];
+    for (const off of offsets) {
+      this.y = origY + off;
+      if (!this.collidesWithWalls(walls) && !allTanks.some(t => this.collidesWithTank(t))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Try nudging X position to slide past an obstacle while moving vertically */
+  _trySlideX(origX, walls, allTanks) {
+    const offsets = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6];
+    for (const off of offsets) {
+      this.x = origX + off;
+      if (!this.collidesWithWalls(walls) && !allTanks.some(t => this.collidesWithTank(t))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   faceDirection(dir) {
+    // When changing direction, snap to grid to align with corridors
+    if (this.dir.x !== dir.x || this.dir.y !== dir.y) {
+      if (dir.x !== 0) {
+        this.y = Math.round(this.y / (CELL / 2)) * (CELL / 2);
+      } else if (dir.y !== 0) {
+        this.x = Math.round(this.x / (CELL / 2)) * (CELL / 2);
+      }
+    }
     this.dir = dir;
   }
 
   shoot(bullets) {
     if (this.shootCooldown > 0 || this.spawnTimer > 0 || this.flashTimer > 0) return;
-    const bx = this.x + this.dir.x * this.half;
-    const by = this.y + this.dir.y * this.half;
+    const bx = this.x + this.dir.x * (this.half + 2);
+    const by = this.y + this.dir.y * (this.half + 2);
     bullets.push(new Bullet(bx, by, this.dir, this.isPlayer));
     this.shootCooldown = this.shootDelay;
   }
@@ -420,7 +512,7 @@ class Tank {
     ctx.fillRect(-s - 2, -s * 0.8, 5, this.size * 0.8);
     ctx.fillRect(s - 3, -s * 0.8, 5, this.size * 0.8);
 
-    // Track details
+    // Track treads
     ctx.fillStyle = '#333';
     for (let i = -3; i <= 3; i++) {
       const ty = i * (this.size * 0.8 / 7);
@@ -661,14 +753,14 @@ function updateEnemyAI(enemy) {
   enemy.moveTimer++;
 
   // Change direction periodically or when stuck
-  if (enemy.moveTimer >= enemy.moveDirChange || enemy.stuckTimer > 20) {
+  if (enemy.moveTimer >= enemy.moveDirChange || enemy.stuckTimer > 15) {
     enemy.moveTimer = 0;
     enemy.stuckTimer = 0;
-    enemy.moveDirChange = 40 + Math.random() * 80;
+    enemy.moveDirChange = 40 + Math.floor(Math.random() * 80);
 
     // Bias: sometimes move toward player or base
     const r = Math.random();
-    if (r < 0.3 && player && player.alive) {
+    if (r < 0.35 && player && player.alive) {
       // Move toward player
       const dx = player.x - enemy.x;
       const dy = player.y - enemy.y;
@@ -687,16 +779,31 @@ function updateEnemyAI(enemy) {
         enemy.faceDirection(dy > 0 ? DIR.DOWN : DIR.UP);
       }
     } else {
-      // Random direction
-      enemy.faceDirection(DIRS[Math.floor(Math.random() * 4)]);
+      // Random direction (avoid reversing if possible)
+      const choices = DIRS.filter(d => !(d.x === -enemy.dir.x && d.y === -enemy.dir.y));
+      if (choices.length === 0) choices.push(...DIRS);
+      enemy.faceDirection(choices[Math.floor(Math.random() * choices.length)]);
     }
   }
 
-  // Move
-  enemy.move(enemy.dir.x, enemy.dir.y, walls, [...enemies, player].filter(Boolean));
+  // Move in the current direction
+  const allTanks = [...enemies, player].filter(t => t && t.alive);
+  enemy.move(enemy.dir, walls, allTanks);
 
-  // Shoot randomly
-  if (Math.random() < 0.02) {
+  // Shoot occasionally when facing player or randomly
+  if (player && player.alive) {
+    const dx = player.x - enemy.x;
+    const dy = player.y - enemy.y;
+    const facingPlayer =
+      (enemy.dir === DIR.RIGHT && dx > 0 && Math.abs(dy) < CELL * 1.5) ||
+      (enemy.dir === DIR.LEFT  && dx < 0 && Math.abs(dy) < CELL * 1.5) ||
+      (enemy.dir === DIR.DOWN  && dy > 0 && Math.abs(dx) < CELL * 1.5) ||
+      (enemy.dir === DIR.UP    && dy < 0 && Math.abs(dx) < CELL * 1.5);
+    if (facingPlayer && Math.random() < 0.06) {
+      enemy.shoot(bullets);
+    }
+  }
+  if (Math.random() < 0.01) {
     enemy.shoot(bullets);
   }
 }
@@ -824,20 +931,41 @@ function update() {
   if (player && player.alive) {
     player.update();
 
-    // Movement
-    let dx = 0, dy = 0;
-    if (keys['ArrowUp'] || keys['KeyW'])    dy = -1;
-    if (keys['ArrowDown'] || keys['KeyS'])  dy = 1;
-    if (keys['ArrowLeft'] || keys['KeyA'])  dx = -1;
-    if (keys['ArrowRight'] || keys['KeyD']) dx = 1;
+    // --- Movement: single direction only (classic Battle City style) ---
+    // Priority: last-in wins — check the most recent key pressed.
+    // We use a direction order preference: if two keys are held,
+    // the one with the higher "priority timestamp" wins.
+    const up    = keys['ArrowUp']    || keys['KeyW'];
+    const down  = keys['ArrowDown']  || keys['KeyS'];
+    const left  = keys['ArrowLeft']  || keys['KeyA'];
+    const right = keys['ArrowRight'] || keys['KeyD'];
 
-    if (dx !== 0 || dy !== 0) {
-      if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
-      if (dx > 0) player.faceDirection(DIR.RIGHT);
-      else if (dx < 0) player.faceDirection(DIR.LEFT);
-      else if (dy > 0) player.faceDirection(DIR.DOWN);
-      else if (dy < 0) player.faceDirection(DIR.UP);
-      player.move(dx, dy, walls, [...enemies, player].filter(Boolean));
+    let moveDir = null;
+    // Resolve horizontal vs vertical by priority timestamps
+    const now = performance.now();
+    if (!keys._dirTime) keys._dirTime = {};
+    // Record when each direction was first pressed
+    for (const [key, pressed] of [['up',up],['down',down],['left',left],['right',right]]) {
+      if (pressed && !keys._dirTime[key]) keys._dirTime[key] = now;
+      if (!pressed) delete keys._dirTime[key];
+    }
+
+    // Pick the most recently pressed direction
+    let latestTime = 0;
+    for (const [key, t] of Object.entries(keys._dirTime)) {
+      if (t > latestTime) {
+        latestTime = t;
+        moveDir = key;
+      }
+    }
+
+    if (moveDir) {
+      switch (moveDir) {
+        case 'up':    player.faceDirection(DIR.UP);    player.move(DIR.UP,    walls, [...enemies, player]); break;
+        case 'down':  player.faceDirection(DIR.DOWN);  player.move(DIR.DOWN,  walls, [...enemies, player]); break;
+        case 'left':  player.faceDirection(DIR.LEFT);  player.move(DIR.LEFT,  walls, [...enemies, player]); break;
+        case 'right': player.faceDirection(DIR.RIGHT); player.move(DIR.RIGHT, walls, [...enemies, player]); break;
+      }
     }
 
     // Shooting
