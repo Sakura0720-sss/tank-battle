@@ -780,7 +780,7 @@ function spawnEnemy() {
   const y = CELL/2;
 
   const enemy = new Tank(x, y, DIR.DOWN, COLORS.enemy, COLORS.enemy_d, false);
-  enemy.speed = (1.2 + Math.random() * 1.0 + (level - 1) * 0.2) / 2;
+  enemy.speed = Math.min(0.55, (1.2 + Math.random() * 1.0 + (level - 1) * 0.2) / 2);
   enemy.shootDelay = 140;
 
   // Check if spawn position is clear
