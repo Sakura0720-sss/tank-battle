@@ -596,6 +596,10 @@ class Bullet {
           baseAlive = false;
           spawnExplosion(w.x + w.w/2, w.y + w.h/2, 30);
         }
+        // Steel blocks bullets but doesn't get destroyed
+        return;
+      }
+    }
   }
 
   draw(ctx) {
