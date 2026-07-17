@@ -467,11 +467,12 @@ class Tank {
     this.dir = dir;
   }
 
-  shoot(bullets) {
+  shoot(bullets, shootDir = null) {
     if (this.shootCooldown > 0 || this.spawnTimer > 0 || this.flashTimer > 0) return;
-    const bx = this.x + this.dir.x * (this.half + 2);
-    const by = this.y + this.dir.y * (this.half + 2);
-    bullets.push(new Bullet(bx, by, this.dir, this.isPlayer));
+    const dir = shootDir || this.dir;
+    const bx = this.x + dir.x * (this.half + 2);
+    const by = this.y + dir.y * (this.half + 2);
+    bullets.push(new Bullet(bx, by, dir, this.isPlayer));
     this.shootCooldown = this.shootDelay;
   }
 
@@ -956,32 +957,23 @@ function update() {
   if (player && player.alive) {
     player.update();
 
-    // --- Movement: single direction only (classic Battle City style) ---
-    // Priority: last-in wins — check the most recent key pressed.
-    // We use a direction order preference: if two keys are held,
-    // the one with the higher "priority timestamp" wins.
-    const up    = keys['ArrowUp']    || keys['KeyW'];
-    const down  = keys['ArrowDown']  || keys['KeyS'];
-    const left  = keys['ArrowLeft']  || keys['KeyA'];
-    const right = keys['ArrowRight'] || keys['KeyD'];
+    // --- Movement: WASD only ---
+    const moveUp    = keys['KeyW'];
+    const moveDown  = keys['KeyS'];
+    const moveLeft  = keys['KeyA'];
+    const moveRight = keys['KeyD'];
 
     let moveDir = null;
-    // Resolve horizontal vs vertical by priority timestamps
     const now = performance.now();
-    if (!keys._dirTime) keys._dirTime = {};
-    // Record when each direction was first pressed
-    for (const [key, pressed] of [['up',up],['down',down],['left',left],['right',right]]) {
-      if (pressed && !keys._dirTime[key]) keys._dirTime[key] = now;
-      if (!pressed) delete keys._dirTime[key];
+    if (!keys._moveTime) keys._moveTime = {};
+    for (const [key, pressed] of [['up',moveUp],['down',moveDown],['left',moveLeft],['right',moveRight]]) {
+      if (pressed && !keys._moveTime[key]) keys._moveTime[key] = now;
+      if (!pressed) delete keys._moveTime[key];
     }
 
-    // Pick the most recently pressed direction
     let latestTime = 0;
-    for (const [key, t] of Object.entries(keys._dirTime)) {
-      if (t > latestTime) {
-        latestTime = t;
-        moveDir = key;
-      }
+    for (const [key, t] of Object.entries(keys._moveTime)) {
+      if (t > latestTime) { latestTime = t; moveDir = key; }
     }
 
     if (moveDir) {
@@ -993,9 +985,14 @@ function update() {
       }
     }
 
-    // Shooting
+    // --- Shooting: Arrow keys + Space/J/F ---
+    // Arrow keys fire in that direction; Space/J/F fire in tank's current facing
+    if (keys['ArrowUp'])    player.shoot(bullets, DIR.UP);
+    if (keys['ArrowDown'])  player.shoot(bullets, DIR.DOWN);
+    if (keys['ArrowLeft'])  player.shoot(bullets, DIR.LEFT);
+    if (keys['ArrowRight']) player.shoot(bullets, DIR.RIGHT);
     if (keys['Space'] || keys['KeyJ'] || keys['KeyF']) {
-      player.shoot(bullets);
+      player.shoot(bullets); // fires in tank's facing direction
     }
   }
 
@@ -1295,7 +1292,7 @@ function init() {
   scoreEl.textContent = '0';
   livesEl.textContent = '3';
   messageEl.textContent = '';
-  hintEl.innerHTML = '🎮 WASD/方向键 移动<br>空格/J 射击';
+  hintEl.innerHTML = '🎮 WASD 移动<br>⬆⬇⬅➡ / 空格 射击';
   restartBtn.classList.add('hidden');
 }
 
