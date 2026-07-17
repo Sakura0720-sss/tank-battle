@@ -361,7 +361,6 @@ class Tank {
    * - If blocked, try sliding along the wall by nudging the perpendicular axis
    */
   move(dir, walls, allTanks) {
-    if (this.spawnTimer > 0) return;
     if (this.flashTimer > 0) return;
 
     const origX = this.x;
@@ -679,6 +678,38 @@ function spawnExplosion(x, y, count = 20) {
 }
 
 // ==================== Load Level ====================
+function findSpawnPosition() {
+  // Search for a clear cell near bottom-center, scanning upward
+  const centerCol = Math.floor(COLS / 2);
+  for (let row = ROWS - 2; row >= 1; row--) {
+    const x = centerCol * CELL + CELL / 2;
+    const y = row * CELL + CELL / 2;
+    const testBox = {
+      x: x - (CELL - 6) / 2,
+      y: y - (CELL - 6) / 2,
+      w: CELL - 6,
+      h: CELL - 6,
+    };
+    // Check walls
+    let blocked = false;
+    for (const w of walls) {
+      if (testBox.x < w.x + w.w && testBox.x + testBox.w > w.x &&
+          testBox.y < w.y + w.h && testBox.y + testBox.h > w.y) {
+        blocked = true;
+        break;
+      }
+    }
+    // Check bounds
+    if (testBox.x < 0 || testBox.x + testBox.w > W ||
+        testBox.y < 0 || testBox.y + testBox.h > H) {
+      blocked = true;
+    }
+    if (!blocked) return { x, y };
+  }
+  // Fallback
+  return { x: centerCol * CELL + CELL / 2, y: 2 * CELL + CELL / 2 };
+}
+
 function loadLevel(levelNum) {
   const mapData = LEVELS[Math.min(levelNum - 1, LEVELS.length - 1)];
   walls = [];
@@ -714,10 +745,9 @@ function loadLevel(levelNum) {
   enemySpawnDelay = Math.max(40, 120 - (levelNum - 1) * 15);
   enemySpawnTimer = 0;
 
-  // Spawn player at bottom center
-  const px = Math.floor(COLS / 2) * CELL + CELL/2;
-  const py = (ROWS - 1) * CELL + CELL/2;
-  player = new Tank(px, py, DIR.UP, COLORS.player, COLORS.player_d, true);
+  // Spawn player at a safe position
+  const spawnPos = findSpawnPosition();
+  player = new Tank(spawnPos.x, spawnPos.y, DIR.UP, COLORS.player, COLORS.player_d, true);
 
   // Spawn initial enemies
   spawnEnemy();
@@ -748,8 +778,6 @@ function spawnEnemy() {
 
 // ==================== Enemy AI ====================
 function updateEnemyAI(enemy) {
-  if (enemy.spawnTimer > 0) return;
-
   enemy.moveTimer++;
 
   // Change direction periodically or when stuck
@@ -859,12 +887,9 @@ function checkBulletTankCollisions() {
           spawnExplosion(player.x, player.y, 25);
           lives--;
           if (lives > 0) {
-            // Respawn player
-            player = new Tank(
-              Math.floor(COLS / 2) * CELL + CELL/2,
-              (ROWS - 1) * CELL + CELL/2,
-              DIR.UP, COLORS.player, COLORS.player_d, true
-            );
+            // Respawn player at a safe position
+            const spawnPos = findSpawnPosition();
+            player = new Tank(spawnPos.x, spawnPos.y, DIR.UP, COLORS.player, COLORS.player_d, true);
           }
         }
       }
