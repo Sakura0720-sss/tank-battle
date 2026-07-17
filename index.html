@@ -292,7 +292,7 @@ class Tank {
     this.colorD = colorD;
     this.isPlayer = isPlayer;
     this.shootCooldown = 0;
-    this.shootDelay = isPlayer ? 15 : 70;
+    this.shootDelay = isPlayer ? 60 : 70;
     this.alive = true;
     this.hp = isPlayer ? 1 : 1;
     this.flashTimer = 0;
@@ -473,7 +473,7 @@ class Tank {
     const dir = shootDir || this.dir;
     const bx = this.x + dir.x * (this.half + 2);
     const by = this.y + dir.y * (this.half + 2);
-    bullets.push(new Bullet(bx, by, dir, this.isPlayer));
+    bullets.push(new Bullet(bx, by, dir, this.isPlayer, this.isPlayer ? 2.5 : 1.25));
     this.shootCooldown = this.shootDelay;
   }
 
@@ -540,11 +540,11 @@ class Tank {
 
 // ==================== Bullet Class ====================
 class Bullet {
-  constructor(x, y, dir, isPlayer) {
+  constructor(x, y, dir, isPlayer, speed = 2.5) {
     this.x = x;
     this.y = y;
     this.dir = dir;
-    this.speed = 2.5;
+    this.speed = speed;
     this.size = 4;
     this.isPlayer = isPlayer;
     this.alive = true;
